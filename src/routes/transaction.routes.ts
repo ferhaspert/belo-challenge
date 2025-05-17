@@ -7,6 +7,10 @@ const router = Router();
 const transactionRepository = AppDataSource.getRepository(Transaction);
 const userRepository = AppDataSource.getRepository(User);
 
+// TODO seria bueno imeplementar un semafoto real para controlar el flujo de transacciones
+// Aca solo agregue una variable pero no es suficiente en un entorno real
+let isProcessingTransaction = false;
+
 const getTransactionStatus = (amount: number) => {
   if (amount > 50000) {
     return TransactionStatus.PENDING;
@@ -44,10 +48,20 @@ router.get("/", (async (req, res) => {
 
 router.post("/", (async (req, res) => {
   console.log("req.body", req.body);
+  
+  // Check if another transaction is being processed
+  if (isProcessingTransaction) {
+    return res.status(409).json({ 
+      message: "Another transaction is being processed. Please try again later." 
+    });
+  }
+
   try {
+    isProcessingTransaction = true;
     const { originId, destinationId, amount } = req.body;
 
     if (!originId || !destinationId || !amount) {
+      isProcessingTransaction = false;
       return res
         .status(400)
         .json({ message: "Origin ID, destination ID and amount are required" });
@@ -57,12 +71,14 @@ router.post("/", (async (req, res) => {
     const destination = await userRepository.findOneBy({ id: destinationId });
 
     if (!origin || !destination) {
+      isProcessingTransaction = false;
       return res
         .status(404)
         .json({ message: "Origin or destination user not found" });
     }
 
     if (Number(origin.balance) < Number(amount)) {
+      isProcessingTransaction = false;
       return res.status(400).json({ message: "Insufficient funds" });
     }
 
@@ -99,6 +115,8 @@ router.post("/", (async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ message: "Error creating transaction", error });
+  } finally {
+    isProcessingTransaction = false;
   }
 }) as RequestHandler);
 
