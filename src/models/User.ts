@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { Transaction } from './Transaction';
 
 @Entity()
@@ -12,7 +12,15 @@ export class User {
     @Column({ unique: true })
     email!: string;
 
-    @Column('decimal', { precision: 10, scale: 2, default: 0 })
+    @Column('decimal', { 
+        precision: 19,  // Total number of digits
+        scale: 4,      // Number of decimal places
+        default: 0,
+        transformer: {
+            to: (value: number) => value,
+            from: (value: string) => Number(value)
+        }
+    })
     balance!: number;
 
     @OneToMany(() => Transaction, transaction => transaction.origin)
@@ -20,6 +28,12 @@ export class User {
 
     @OneToMany(() => Transaction, transaction => transaction.destination)
     receivedTransactions!: Transaction[];
+
+    @CreateDateColumn()
+    createdAt!: Date;
+
+    @UpdateDateColumn()
+    updatedAt!: Date;
 
     constructor(
         name: string,

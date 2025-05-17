@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { User } from './User';
 
 export enum TransactionStatus {
@@ -30,6 +30,9 @@ export class Transaction {
 
     @CreateDateColumn()
     createdAt!: Date;
+
+    @UpdateDateColumn()
+    updatedAt!: Date;
 
     constructor(
         origin: User,

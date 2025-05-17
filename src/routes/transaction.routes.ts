@@ -7,7 +7,7 @@ const router = Router();
 const transactionRepository = AppDataSource.getRepository(Transaction);
 const userRepository = AppDataSource.getRepository(User);
 
-const getTransactionStatus = (origin: User, destination: User, amount: number) => {
+const getTransactionStatus = (amount: number) => {
   if (amount > 50000) {
     return TransactionStatus.PENDING;
   }
@@ -42,7 +42,6 @@ router.get("/", (async (req, res) => {
   }
 }) as RequestHandler);
 
-// Create new transaction
 router.post("/", (async (req, res) => {
   console.log("req.body", req.body);
   try {
@@ -55,9 +54,7 @@ router.post("/", (async (req, res) => {
     }
 
     const origin = await userRepository.findOneBy({ id: originId });
-    console.log("origin", origin);
     const destination = await userRepository.findOneBy({ id: destinationId });
-    console.log("destination", destination);
 
     if (!origin || !destination) {
       return res
@@ -65,44 +62,46 @@ router.post("/", (async (req, res) => {
         .json({ message: "Origin or destination user not found" });
     }
 
-    if (origin.balance < amount) {
+    if (Number(origin.balance) < Number(amount)) {
       return res.status(400).json({ message: "Insufficient funds" });
     }
 
-    // Start a transaction
-    const queryRunner = AppDataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    const status = getTransactionStatus(amount);
+    console.log("status", status);
+    const transaction = new Transaction(origin, destination, amount, status);
 
-    try {
-      const status = getTransactionStatus(origin, destination, amount);
-      const transaction = new Transaction(origin, destination, amount, status);
-      const savedTransaction = await queryRunner.manager.save(
-        Transaction,
-        transaction
-      );
+    if (status === TransactionStatus.CONFIRMED) {
+      const queryRunner = AppDataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-      origin.balance -= amount;
-      destination.balance += amount;
-      await queryRunner.manager.save(User, [origin, destination]);
-
-      // Commit the transaction
-      await queryRunner.commitTransaction();
+      try {
+        const savedTransaction = await queryRunner.manager.save(
+          Transaction,
+          transaction
+        );
+        origin.balance -= Number(amount);
+        destination.balance += Number(amount);
+        await queryRunner.manager.save(User, [origin, destination]);
+        await queryRunner.commitTransaction();
+        res.status(201).json(savedTransaction);
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        throw error;
+      } finally {
+        await queryRunner.release();
+      }
+    } else {
+      console.log("transaction", transaction);
+      const savedTransaction = await transactionRepository.save(transaction);
+      console.log("savedTransaction", savedTransaction);
       res.status(201).json(savedTransaction);
-    } catch (error) {
-      // Rollback in case of error
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      // Release the query runner
-      await queryRunner.release();
     }
   } catch (error) {
     res.status(500).json({ message: "Error creating transaction", error });
   }
 }) as RequestHandler);
 
-// Update transaction status
 router.patch("/:id/status", (async (req, res) => {
   const validStatuses = [
     TransactionStatus.CONFIRMED,
@@ -119,6 +118,7 @@ router.patch("/:id/status", (async (req, res) => {
       where: { id: req.params.id },
       relations: ["origin", "destination"],
     });
+    console.log("transaction", transaction);
 
     if (!transaction) {
       return res.status(404).json({ message: "Transaction not found" });
@@ -128,9 +128,52 @@ router.patch("/:id/status", (async (req, res) => {
       return res.status(400).json({ message: "Invalid status" });
     }
 
-    transaction.status = status;
-    const updatedTransaction = await transactionRepository.save(transaction);
-    res.json(updatedTransaction);
+    if (transaction.status !== TransactionStatus.PENDING) {
+      return res.status(400).json({
+        message: `Transaction was already ${transaction.status} and cannot be modified`,
+      });
+    }
+
+    const queryRunner = AppDataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      if (
+        status === TransactionStatus.CONFIRMED &&
+        transaction.status === TransactionStatus.PENDING
+      ) {
+        const origin = transaction.origin;
+        const destination = transaction.destination;
+        const amount = transaction.amount;
+
+        console.log("origin.balance", origin.balance);
+        console.log("amount", amount);
+        if (Number(origin.balance) < Number(amount)) {
+          console.log("origin.balance < amount", Number(origin.balance) < Number(amount));
+          await queryRunner.rollbackTransaction();
+          return res.status(400).json({ message: "Insufficient funds" });
+        }
+
+        origin.balance -= Number(amount);
+        destination.balance += Number(amount);
+        await queryRunner.manager.save(User, [origin, destination]);
+      }
+
+      transaction.status = status;
+      const updatedTransaction = await queryRunner.manager.save(
+        Transaction,
+        transaction
+      );
+
+      await queryRunner.commitTransaction();
+      res.json(updatedTransaction);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   } catch (error) {
     res
       .status(500)
